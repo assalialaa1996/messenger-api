@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { JwtModule } from '@nestjs/jwt';
@@ -9,16 +9,17 @@ import {
   SharedService,
   UserEntity,
   UsersRepository,
-  FriendRequestsRepository,
-  FriendRequestEntity,
-  ConversationEntity,
-  MessageEntity,
+  CustomerEntity,
 } from '@app/shared';
 
 import { JwtGuard } from './jwt.guard';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtStrategy } from './jwt-strategy';
+import { SmsGatewayService } from '@app/shared/services/sms-gateway.service';
+import { CustomersRepository } from '@app/shared/repositories/customers.repository';
+import { APP_PIPE } from '@nestjs/core';
+import { RefreshTokenStrategy } from './refreshToken.strategy';
 
 @Module({
   imports: [
@@ -33,17 +34,13 @@ import { JwtStrategy } from './jwt-strategy';
     SharedModule,
     PostgresDBModule,
 
-    TypeOrmModule.forFeature([
-      UserEntity,
-      FriendRequestEntity,
-      ConversationEntity,
-      MessageEntity,
-    ]),
+    TypeOrmModule.forFeature([UserEntity, CustomerEntity]),
   ],
   controllers: [AuthController],
   providers: [
     JwtGuard,
     JwtStrategy,
+    RefreshTokenStrategy,
     {
       provide: 'AuthServiceInterface',
       useClass: AuthService,
@@ -53,12 +50,16 @@ import { JwtStrategy } from './jwt-strategy';
       useClass: UsersRepository,
     },
     {
+      provide: 'CustomersRepositoryInterface',
+      useClass: CustomersRepository,
+    },
+    {
       provide: 'SharedServiceInterface',
       useClass: SharedService,
     },
     {
-      provide: 'FriendRequestsRepositoryInterface',
-      useClass: FriendRequestsRepository,
+      provide: 'SmsGatewayServiceInterface',
+      useClass: SmsGatewayService,
     },
   ],
 })

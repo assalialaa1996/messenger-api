@@ -1,114 +1,70 @@
 import {
-  ConflictException,
   Injectable,
   Inject,
   UnauthorizedException,
   BadRequestException,
+  NotAcceptableException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 
-import * as bcrypt from 'bcrypt';
-
-import {
-  FriendRequestEntity,
-  FriendRequestsRepository,
-  UserEntity,
-  UserJwt,
-  UserRepositoryInterface,
-} from '@app/shared';
+import { ConfigService } from '@nestjs/config';
+import * as crypto from 'crypto';
+import { UserEntity, UserJwt } from '@app/shared';
 
 import { ExistingUserDTO } from './dtos/existing-user.dto';
-import { NewUserDTO } from './dtos/new-user.dto';
 import { AuthServiceInterface } from './interfaces/auth.service.interface';
+import { CustomerRepositoryInterface } from '@app/shared/interfaces/customers.repository.interface';
+import { SendOtpDto } from '@app/shared/dto/send-otp.dto';
+import { SmsGatewayService } from '@app/shared/services/sms-gateway.service';
+import { ValidateOtpDto } from '@app/shared/dto/validate-otp.dto';
+import { RpcException } from '@nestjs/microservices';
+import * as argon2 from 'argon2';
+import { RefreshTokenDto } from '@app/shared/dto/refresh-token.dto';
 
 @Injectable()
 export class AuthService implements AuthServiceInterface {
   constructor(
-    @Inject('UsersRepositoryInterface')
-    private readonly usersRepository: UserRepositoryInterface,
-    @Inject('FriendRequestsRepositoryInterface')
-    private readonly friendRequestsRepository: FriendRequestsRepository,
+    @Inject('CustomersRepositoryInterface')
+    private readonly customersRepository: CustomerRepositoryInterface,
     private readonly jwtService: JwtService,
+    private readonly smsGatewayService: SmsGatewayService,
+    private configService: ConfigService,
   ) {}
 
   async getUsers(): Promise<UserEntity[]> {
-    return await this.usersRepository.findAll();
+    return await this.customersRepository.findAll();
   }
 
-  async getUserById(id: number): Promise<UserEntity> {
-    return await this.usersRepository.findOneById(id);
+  async getUserById(id: string): Promise<UserEntity> {
+    return await this.customersRepository.findOneById(id);
   }
 
-  async findByEmail(email: string): Promise<UserEntity> {
-    return this.usersRepository.findByCondition({
-      where: { email },
-      select: ['id', 'firstName', 'lastName', 'email', 'password'],
+  async findByPhone(phone: string): Promise<UserEntity> {
+    return this.customersRepository.findByCondition({
+      where: { phone },
+      select: ['id', 'fullName', 'email', 'phone', 'otp'],
     });
   }
 
-  async findById(id: number): Promise<UserEntity> {
-    return this.usersRepository.findOneById(id);
-  }
-
-  async hashPassword(password: string): Promise<string> {
-    return bcrypt.hash(password, 12);
-  }
-
-  async register(newUser: Readonly<NewUserDTO>): Promise<UserEntity> {
-    const { firstName, lastName, email, password } = newUser;
-
-    const existingUser = await this.findByEmail(email);
-
-    if (existingUser) {
-      throw new ConflictException('An account with that email already exists!');
-    }
-
-    const hashedPassword = await this.hashPassword(password);
-
-    const savedUser = await this.usersRepository.save({
-      firstName,
-      lastName,
-      email,
-      password: hashedPassword,
+  async findOneById(id: string): Promise<UserEntity> {
+    return this.customersRepository.findByCondition({
+      where: { id },
+      select: ['id', 'fullName', 'email', 'phone', 'otp', 'refreshToken'],
     });
-
-    delete savedUser.password;
-    return savedUser;
   }
 
-  async doesPasswordMatch(
-    password: string,
-    hashedPassword: string,
-  ): Promise<boolean> {
-    return bcrypt.compare(password, hashedPassword);
-  }
-
-  async validateUser(email: string, password: string): Promise<UserEntity> {
-    const user = await this.findByEmail(email);
-
-    const doesUserExist = !!user;
-
-    if (!doesUserExist) return null;
-
-    const doesPasswordMatch = await this.doesPasswordMatch(
-      password,
-      user.password,
-    );
-
-    if (!doesPasswordMatch) return null;
-
-    return user;
+  async findById(id: string): Promise<UserEntity> {
+    return this.customersRepository.findOneById(id);
   }
 
   async login(existingUser: Readonly<ExistingUserDTO>) {
     const { email, password } = existingUser;
-    const user = await this.validateUser(email, password);
+    const user = null; //await this.validateUser(email, password);
 
     if (!user) {
       throw new UnauthorizedException();
     }
-
-    delete user.password;
 
     const jwt = await this.jwtService.signAsync({ user });
 
@@ -138,46 +94,145 @@ export class AuthService implements AuthServiceInterface {
     }
   }
 
-  async addFriend(
-    userId: number,
-    friendId: number,
-  ): Promise<FriendRequestEntity> {
-    const creator = await this.findById(userId);
-    const receiver = await this.findById(friendId);
+  sendOtp = async (sendOtpDto: SendOtpDto) => {
+    //fetch customer from DB
+    const fetchedCustomer = await this.findByPhone(sendOtpDto.phone);
+    console.log(fetchedCustomer);
 
-    return await this.friendRequestsRepository.save({ creator, receiver });
+    //check if customer exists
+    if (fetchedCustomer) {
+      const generatedOtpCode = crypto
+        .randomInt(0, 9999)
+        .toString()
+        .padStart(4, '0');
+      console.log('sent otp is: ', generatedOtpCode);
+      fetchedCustomer.otp = generatedOtpCode;
+      await this.customersRepository.save(fetchedCustomer);
+      const sentSms = await this.smsGatewayService.sendMessage(
+        sendOtpDto.phone,
+        `Please use code ${generatedOtpCode} to login to your account`,
+      );
+      if (!(sentSms.data && sentSms.data.StatusId == 1))
+        throw new NotAcceptableException('Cannot Send Otp Code');
+
+      return {};
+    } else {
+      const generatedOtpCode = crypto
+        .randomInt(0, 9999)
+        .toString()
+        .padStart(4, '0');
+      console.log('sent otp is: ', generatedOtpCode);
+      await this.customersRepository.save({
+        otp: generatedOtpCode,
+        phone: sendOtpDto.phone,
+        phoneCountryCode: '+972',
+      });
+      const sentSms = await this.smsGatewayService.sendMessage(
+        sendOtpDto.phone,
+        `Please use code ${generatedOtpCode} to login to your account`,
+      );
+      if (!(sentSms.data && sentSms.data.StatusId == 1))
+        throw new NotAcceptableException('Cannot Send Otp Code');
+
+      return {};
+    }
+  };
+
+  validateOtp = async (validateOtpDto: ValidateOtpDto) => {
+    //fetch customer from DB
+    const fetchedCustomer = await this.findByPhone(validateOtpDto.phone);
+    console.log(fetchedCustomer);
+    if (!fetchedCustomer)
+      throw new RpcException(
+        new NotAcceptableException('No customer with this phone number'),
+      );
+
+    if (fetchedCustomer.otp == null)
+      throw new RpcException(
+        new NotAcceptableException('Please request OTP code first'),
+      );
+
+    if (fetchedCustomer.otp != validateOtpDto.otp)
+      throw new RpcException(new NotAcceptableException('Invalid Otp Code'));
+    fetchedCustomer.otp = null;
+    await this.customersRepository.save(fetchedCustomer);
+    delete fetchedCustomer.otp;
+
+    const [accessToken, refreshToken] = await Promise.all([
+      this.jwtService.signAsync(
+        {
+          fetchedCustomer,
+        },
+        {
+          secret: this.configService.get<string>('JWT_SECRET'),
+          expiresIn: '15m',
+        },
+      ),
+      this.jwtService.signAsync(
+        {
+          fetchedCustomer,
+        },
+        {
+          secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
+          expiresIn: '7d',
+        },
+      ),
+    ]);
+    await this.updateRefreshToken(fetchedCustomer.id, refreshToken);
+
+    return { accessToken, refreshToken, user: fetchedCustomer };
+  };
+
+  hashData(data: string) {
+    return argon2.hash(data);
   }
 
-  async getFriends(userId: number): Promise<FriendRequestEntity[]> {
-    const creator = await this.findById(userId);
-
-    return await this.friendRequestsRepository.findWithRelations({
-      where: [{ creator }, { receiver: creator }],
-      relations: ['creator', 'receiver'],
-    });
+  async updateRefreshToken(userId: string, refreshToken: string) {
+    const hashedRefreshToken = await this.hashData(refreshToken);
+    const fetchedCustomer = await this.findOneById(userId);
+    fetchedCustomer.refreshToken = hashedRefreshToken;
+    await this.customersRepository.save(fetchedCustomer);
   }
 
-  async getFriendsList(userId: number) {
-    const friendRequests = await this.getFriends(userId);
+  async logout(userId: string) {
+    const fetchedCustomer = await this.findOneById(userId);
+    fetchedCustomer.refreshToken = null;
+    await this.customersRepository.save(fetchedCustomer);
+  }
 
-    if (!friendRequests) return [];
+  async refreshTokens(refreshTokenDto: RefreshTokenDto) {
+    const user = await this.findOneById(refreshTokenDto.id);
+    if (!user || !user.refreshToken)
+      throw new RpcException(new ForbiddenException('Access Denied'));
 
-    const friends = friendRequests.map((friendRequest) => {
-      const isUserCreator = userId === friendRequest.creator.id;
-      const friendDetails = isUserCreator
-        ? friendRequest.receiver
-        : friendRequest.creator;
+    const refreshTokenMatches = await argon2.verify(
+      user.refreshToken,
+      refreshTokenDto.refreshToken,
+    );
+    if (!refreshTokenMatches) throw new ForbiddenException('Access Denied');
+    delete user.otp;
+    const [accessToken, refreshToken] = await Promise.all([
+      this.jwtService.signAsync(
+        {
+          user,
+        },
+        {
+          secret: this.configService.get<string>('JWT_SECRET'),
+          expiresIn: '15m',
+        },
+      ),
+      this.jwtService.signAsync(
+        {
+          user,
+        },
+        {
+          secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
+          expiresIn: '7d',
+        },
+      ),
+    ]);
+    await this.updateRefreshToken(user.id, refreshToken);
 
-      const { id, firstName, lastName, email } = friendDetails;
-
-      return {
-        id,
-        email,
-        firstName,
-        lastName,
-      };
-    });
-
-    return friends;
+    return { accessToken, refreshToken, user };
   }
 }

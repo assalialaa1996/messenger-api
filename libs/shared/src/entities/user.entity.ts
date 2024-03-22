@@ -1,50 +1,35 @@
 import {
+  ChildEntity,
   Column,
   Entity,
-  ManyToMany,
-  OneToMany,
   PrimaryGeneratedColumn,
+  TableInheritance,
 } from 'typeorm';
-import { ConversationEntity } from './conversation.entity';
 
-import { FriendRequestEntity } from './friend-request.entity';
-import { MessageEntity } from './message.entity';
-
+@TableInheritance({ column: { type: 'text', name: 'kind' } })
 @Entity('user')
-export class UserEntity {
-  @PrimaryGeneratedColumn()
-  id: number;
+export abstract class UserEntity {
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
 
-  @Column()
-  firstName: string;
+  @Column({ nullable: true })
+  fullName: string;
 
-  @Column()
-  lastName: string;
-
-  @Column({ unique: true })
+  @Column({ unique: true, nullable: true })
   email: string;
 
-  @Column({ select: false })
-  password: string;
+  @Column()
+  phoneCountryCode: string;
 
-  @OneToMany(
-    () => FriendRequestEntity,
-    (friendRequestEntity) => friendRequestEntity.creator,
-  )
-  friendRequestCreator: FriendRequestEntity[];
+  @Column({ nullable: true })
+  refreshToken: string;
 
-  @OneToMany(
-    () => FriendRequestEntity,
-    (FriendRequestEntity) => FriendRequestEntity.receiver,
-  )
-  friendRequestReceiver: FriendRequestEntity[];
+  @Column({ unique: true })
+  phone: string;
 
-  @ManyToMany(
-    () => ConversationEntity,
-    (conversationEntity) => conversationEntity.users,
-  )
-  conversations: ConversationEntity[];
-
-  @OneToMany(() => MessageEntity, (messageEntity) => messageEntity.user)
-  messages: MessageEntity[];
+  @Column({ select: false, nullable: true })
+  otp: string;
 }
+
+@ChildEntity('Customer')
+export class CustomerEntity extends UserEntity {}

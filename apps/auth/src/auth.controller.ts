@@ -9,9 +9,11 @@ import {
 import { SharedService } from '@app/shared';
 
 import { AuthService } from './auth.service';
-import { NewUserDTO } from './dtos/new-user.dto';
 import { ExistingUserDTO } from './dtos/existing-user.dto';
 import { JwtGuard } from './jwt.guard';
+import { SendOtpDto } from '@app/shared/dto/send-otp.dto';
+import { ValidateOtpDto } from '@app/shared/dto/validate-otp.dto';
+import { RefreshTokenDto } from '@app/shared/dto/refresh-token.dto';
 
 @Controller()
 export class AuthController {
@@ -32,18 +34,46 @@ export class AuthController {
   @MessagePattern({ cmd: 'get-user' })
   async getUserById(
     @Ctx() context: RmqContext,
-    @Payload() user: { id: number },
+    @Payload() user: { id: string },
   ) {
     this.sharedService.acknowledgeMessage(context);
 
     return this.authService.getUserById(user.id);
   }
 
-  @MessagePattern({ cmd: 'register' })
-  async register(@Ctx() context: RmqContext, @Payload() newUser: NewUserDTO) {
+  @MessagePattern({ cmd: 'send-otp' })
+  async sendOtp(@Ctx() context: RmqContext, @Payload() sendOtpDto: SendOtpDto) {
     this.sharedService.acknowledgeMessage(context);
 
-    return this.authService.register(newUser);
+    return this.authService.sendOtp(sendOtpDto);
+  }
+
+  @MessagePattern({ cmd: 'validate-otp' })
+  async validateOtp(
+    @Ctx() context: RmqContext,
+    @Payload() validateOtpDto: ValidateOtpDto,
+  ) {
+    this.sharedService.acknowledgeMessage(context);
+
+    try {
+      return this.authService.validateOtp(validateOtpDto);
+    } catch (error) {
+      return error;
+    }
+  }
+
+  @MessagePattern({ cmd: 'refresh-token' })
+  async refreshTokens(
+    @Ctx() context: RmqContext,
+    @Payload() refreshTokenDto: RefreshTokenDto,
+  ) {
+    this.sharedService.acknowledgeMessage(context);
+
+    try {
+      return this.authService.refreshTokens(refreshTokenDto);
+    } catch (error) {
+      return error;
+    }
   }
 
   @MessagePattern({ cmd: 'login' })
@@ -67,6 +97,13 @@ export class AuthController {
     return this.authService.verifyJwt(payload.jwt);
   }
 
+  @MessagePattern({ cmd: 'logout' })
+  async logout(@Ctx() context: RmqContext, @Payload() user: { id: string }) {
+    this.sharedService.acknowledgeMessage(context);
+
+    return this.authService.logout(user.id);
+  }
+
   @MessagePattern({ cmd: 'decode-jwt' })
   async decodeJwt(
     @Ctx() context: RmqContext,
@@ -75,35 +112,5 @@ export class AuthController {
     this.sharedService.acknowledgeMessage(context);
 
     return this.authService.getUserFromHeader(payload.jwt);
-  }
-
-  @MessagePattern({ cmd: 'add-friend' })
-  async addFriend(
-    @Ctx() context: RmqContext,
-    @Payload() payload: { userId: number; friendId: number },
-  ) {
-    this.sharedService.acknowledgeMessage(context);
-
-    return this.authService.addFriend(payload.userId, payload.friendId);
-  }
-
-  @MessagePattern({ cmd: 'get-friends' })
-  async getFriends(
-    @Ctx() context: RmqContext,
-    @Payload() payload: { userId: number },
-  ) {
-    this.sharedService.acknowledgeMessage(context);
-
-    return this.authService.getFriends(payload.userId);
-  }
-
-  @MessagePattern({ cmd: 'get-friends-list' })
-  async getFriendsList(
-    @Ctx() context: RmqContext,
-    @Payload() payload: { userId: number },
-  ) {
-    this.sharedService.acknowledgeMessage(context);
-
-    return this.authService.getFriendsList(payload.userId);
   }
 }
